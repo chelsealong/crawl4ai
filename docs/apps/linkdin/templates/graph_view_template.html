@@ -251,30 +251,38 @@
 
 
     <script>
-        // Escapes untrusted crawler/uploaded data before it is interpolated into innerHTML,
-        // including inside quoted attributes (crawled fields are never safe HTML).
-        function escapeHtml(value) {
-            return String(value ?? '').replace(/[&<>"']/g, ch => ({
-                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-            }[ch]));
-        }
-
         // Untrusted URLs (profile_url, avatar_url, person id) must not be assigned
-        // to href/src as-is: entity escaping does not block a `javascript:` (or
-        // other non-http) scheme reaching setAttribute. Only allow http(s) or
-        // scheme-relative URLs through; anything else falls back to '#'.
-        function safeUrl(value, fallback = '#') {
+        // to href/src as-is. Only allow http(s) URLs through and normalize them
+        // before assigning the resulting value through a DOM property.
+        function safeUrl(value, fallback = '#', base = null) {
             const raw = String(value ?? '').trim();
             if (!raw) return fallback;
             try {
-                const parsed = new URL(raw, 'https://example.com/');
+                const parsed = new URL(
+                    raw,
+                    base || globalThis.location?.href || 'https://example.com/'
+                );
                 if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-                    return escapeHtml(raw);
+                    return parsed.href;
                 }
             } catch (e) {
                 // Malformed URL - fall through to fallback.
             }
             return fallback;
+        }
+
+        // Append streamed text without reparsing the existing message as HTML.
+        function appendTextWithBreaks(container, value) {
+            String(value ?? '').split('\n').forEach((line, index) => {
+                if (index > 0) container.appendChild(document.createElement('br'));
+                container.appendChild(document.createTextNode(line));
+            });
+        }
+
+        function textElement(value) {
+            const element = document.createElement('span');
+            element.textContent = String(value ?? '');
+            return element;
         }
 
         // Check localStorage first, otherwise fetch default data
@@ -388,7 +396,7 @@
             const nodes = new vis.DataSet(data.nodes.map(n => ({
                 id: n.id,
                 label: n.name,
-                title: `${n.name}\n${n.industry || 'Industry: N/A'}\n${n.followers?.toLocaleString() || '0'} followers`,
+                title: textElement(`${n.name}\n${n.industry || 'Industry: N/A'}\n${n.followers?.toLocaleString() || '0'} followers`),
                 shape: 'dot',
                 font: {
                     color: '#ffffff',
@@ -526,20 +534,29 @@
                 li.className = 'p-3 rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 transition-colors'
                 li.innerHTML = `
                         <div class="flex justify-between items-start mb-1">
-                            <h3 class="font-semibold text-blue-400 cursor-pointer">${escapeHtml(n.name)}</h3>
-                            <span class="px-2 py-0.5 bg-neutral-700 rounded-full text-xs">${escapeHtml(n.industry || 'N/A')}</span>
+                            <h3 data-field="company-name" class="font-semibold text-blue-400 cursor-pointer"></h3>
+                            <span data-field="company-industry" class="px-2 py-0.5 bg-neutral-700 rounded-full text-xs"></span>
                         </div>
-                        <p class="text-xs text-neutral-300 mb-2">${escapeHtml(n.about || 'No description available')}</p>
+                        <p data-field="company-about" class="text-xs text-neutral-300 mb-2"></p>
                         <div class="flex justify-between items-center text-xs">
                             <div class="flex items-center">
                                 <i class="fa fa-users mr-1 text-neutral-400"></i>
-                                <span>${n.followers?.toLocaleString() || '0'} followers</span>
+                                <span data-field="company-followers"></span>
                             </div>
-                            <a href="https://www.linkedin.com${escapeHtml(n.handle || '')}" target="_blank" class="text-emerald-400 hover:text-emerald-300">
+                            <a data-field="company-link" target="_blank" rel="noopener noreferrer" class="text-emerald-400 hover:text-emerald-300">
                                 <i class="fab fa-linkedin mr-1"></i>View on LinkedIn
                             </a>
                         </div>
                     `
+                li.querySelector('[data-field="company-name"]').textContent = n.name ?? ''
+                li.querySelector('[data-field="company-industry"]').textContent = n.industry || 'N/A'
+                li.querySelector('[data-field="company-about"]').textContent = n.about || 'No description available'
+                li.querySelector('[data-field="company-followers"]').textContent = `${n.followers?.toLocaleString() || '0'} followers`
+                li.querySelector('[data-field="company-link"]').href = safeUrl(
+                    n.handle,
+                    'https://www.linkedin.com/',
+                    'https://www.linkedin.com/'
+                )
                 // Make the entire card clickable for better UX
                 li.style.cursor = 'pointer'
                 li.onclick = (e) => {
@@ -620,31 +637,17 @@
                 pane.innerHTML = `
   <div class="p-4 border-b border-neutral-700 bg-neutral-800">
     <div class="flex justify-between items-center">
-      <h2 class="font-semibold text-lg text-blue-400">${escapeHtml(companyName)}</h2>
-      <span class="px-2 py-1 bg-neutral-700 rounded-full text-xs">${employeeCount} employees</span>
+      <h2 data-field="company-name" class="font-semibold text-lg text-blue-400"></h2>
+      <span class="px-2 py-1 bg-neutral-700 rounded-full text-xs"><span data-field="employee-count"></span> employees</span>
     </div>
   </div>
   <div id="orgNet" style="height:320px" class="border-b border-neutral-700"></div>
   <div class="p-4 bg-neutral-800">
      <div class="flex justify-between items-center mb-3">
        <h3 class="font-semibold">Decision Makers</h3>
-       <span class="px-2 py-0.5 bg-emerald-700 text-emerald-100 rounded-full text-xs">${decisionMakers.length} key people</span>
+       <span class="px-2 py-0.5 bg-emerald-700 text-emerald-100 rounded-full text-xs"><span data-field="decision-maker-count"></span> key people</span>
      </div>
-     <ul class="text-sm space-y-2 max-h-60 overflow-y-auto pr-1 mb-4">
-       ${decisionMakers.map(n => `
-         <li class="p-2 rounded bg-neutral-700 hover:bg-neutral-600 transition-colors flex justify-between items-center">
-           <div>
-             <div class="font-medium">${escapeHtml(n.name)}</div>
-             <div class="text-xs text-neutral-300">${escapeHtml(n.title)}</div>
-           </div>
-           <div class="flex items-center gap-2">
-             <span class="text-xs px-2 py-0.5 rounded-full" style="background-color:${colorForScore(n.decision_score)}">${(n.decision_score * 100).toFixed(0)}%</span>
-             <a href="${safeUrl(n.profile_url)}" target="_blank" class="text-emerald-400 hover:text-emerald-300 text-xs">
-               <i class="fab fa-linkedin"></i>
-             </a>
-           </div>
-         </li>`).join('')}
-     </ul>
+     <ul data-field="decision-makers" class="text-sm space-y-2 max-h-60 overflow-y-auto pr-1 mb-4"></ul>
      <div class="mt-4 text-xs border-t border-neutral-700 pt-3">
        <div class="font-semibold mb-2">Influence Scale</div>
        <div class="h-2 w-full rounded-full mb-1" style="background: linear-gradient(to right, rgb(255,0,100), rgb(0,255,100))"></div>
@@ -656,10 +659,43 @@
   </div>
   <div id="personPane" class="p-4 border-t border-neutral-700 text-sm bg-neutral-900 hidden"></div>`
 
+                pane.querySelector('[data-field="company-name"]').textContent = companyName
+                pane.querySelector('[data-field="employee-count"]').textContent = employeeCount
+                pane.querySelector('[data-field="decision-maker-count"]').textContent = decisionMakers.length
+
+                const decisionMakerList = pane.querySelector('[data-field="decision-makers"]')
+                decisionMakers.forEach(person => {
+                    const item = document.createElement('li')
+                    item.className = 'p-2 rounded bg-neutral-700 hover:bg-neutral-600 transition-colors flex justify-between items-center'
+                    item.innerHTML = `
+                        <div>
+                          <div data-field="person-name" class="font-medium"></div>
+                          <div data-field="person-title" class="text-xs text-neutral-300"></div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span data-field="decision-score" class="text-xs px-2 py-0.5 rounded-full"></span>
+                          <a data-field="profile-link" target="_blank" rel="noopener noreferrer" class="text-emerald-400 hover:text-emerald-300 text-xs">
+                            <i class="fab fa-linkedin"></i>
+                          </a>
+                        </div>`
+
+                    item.querySelector('[data-field="person-name"]').textContent = person.name ?? ''
+                    item.querySelector('[data-field="person-title"]').textContent = person.title ?? ''
+                    const score = item.querySelector('[data-field="decision-score"]')
+                    score.style.backgroundColor = colorForScore(person.decision_score)
+                    score.textContent = `${(person.decision_score * 100).toFixed(0)}%`
+                    item.querySelector('[data-field="profile-link"]').href = safeUrl(
+                        person.profile_url,
+                        '#',
+                        'https://www.linkedin.com/'
+                    )
+                    decisionMakerList.appendChild(item)
+                })
+
                 const n = new vis.DataSet(chart.nodes.map(p => ({
                     id: p.id,
                     label: p.name,
-                    title: `${p.name} - ${p.title || 'Employee'} (${(p.decision_score * 100).toFixed(0)}%)`,
+                    title: textElement(`${p.name} - ${p.title || 'Employee'} (${(p.decision_score * 100).toFixed(0)}%)`),
                     shape: 'box',
                     color: {
                         background: colorForScore(p.decision_score || 0),
@@ -748,41 +784,37 @@
                 box.innerHTML = `
                     <div class="bg-neutral-800 rounded-lg p-4">
                       <div class="flex items-start space-x-3">
-                        <img src="${safeUrl(p.avatar_url, 'https://ui-avatars.com/api/?name=' + encodeURIComponent(p.name))}"
-                             class="h-16 w-16 rounded-full object-cover border-2 border-neutral-700"/>
+                        <img data-field="avatar" class="h-16 w-16 rounded-full object-cover border-2 border-neutral-700"/>
                         <div class="flex-1">
                           <div class="flex justify-between items-start">
                             <div>
-                              <div class="font-semibold text-lg">${escapeHtml(p.name)}</div>
-                              <div class="text-neutral-300 text-sm">${escapeHtml(p.title || 'Employee')}</div>
+                              <div data-field="person-name" class="font-semibold text-lg"></div>
+                              <div data-field="person-title" class="text-neutral-300 text-sm"></div>
                             </div>
-                            <span class="px-2 py-1 rounded-full text-sm font-medium"
-                                  style="background-color:${scoreColor}">
-                              ${scorePercentage}% influence
-                            </span>
+                            <span data-field="decision-score" class="px-2 py-1 rounded-full text-sm font-medium"></span>
                           </div>
 
                           <div class="mt-3 grid grid-cols-2 gap-2 text-xs text-neutral-300">
                             <div class="flex items-center">
                               <i class="fas fa-sitemap w-5 text-neutral-500"></i>
-                              <span class="ml-1">${escapeHtml(p.dept || 'Department not specified')}</span>
+                              <span data-field="department" class="ml-1"></span>
                             </div>
                             <div class="flex items-center">
                               <i class="fas fa-calendar-alt w-5 text-neutral-500"></i>
-                              <span class="ml-1">${p.yoe_current || '?'} years at company</span>
+                              <span data-field="years-at-company" class="ml-1"></span>
                             </div>
                             <div class="flex items-center">
                               <i class="fas fa-briefcase w-5 text-neutral-500"></i>
-                              <span class="ml-1">${escapeHtml(p.title_level || 'Level not specified')}</span>
+                              <span data-field="title-level" class="ml-1"></span>
                             </div>
                             <div class="flex items-center">
                               <i class="fas fa-user-friends w-5 text-neutral-500"></i>
-                              <span class="ml-1">${p.connection_count || '?'} connections</span>
+                              <span data-field="connection-count" class="ml-1"></span>
                             </div>
                           </div>
 
                           <div class="mt-3 flex justify-end">
-                            <a href="${safeUrl(p.id)}" target="_blank"
+                            <a data-field="profile-link" target="_blank" rel="noopener noreferrer"
                                class="bg-emerald-800 hover:bg-emerald-700 text-emerald-100 px-3 py-1 rounded text-xs flex items-center transition-colors">
                               <i class="fab fa-linkedin mr-1"></i> View on LinkedIn
                             </a>
@@ -790,6 +822,27 @@
                         </div>
                       </div>
                     </div>`
+
+                const avatar = box.querySelector('[data-field="avatar"]')
+                avatar.src = safeUrl(
+                    p.avatar_url,
+                    'https://ui-avatars.com/api/?name=' + encodeURIComponent(p.name)
+                )
+                avatar.alt = p.name || 'Employee'
+                box.querySelector('[data-field="person-name"]').textContent = p.name ?? ''
+                box.querySelector('[data-field="person-title"]').textContent = p.title || 'Employee'
+                const score = box.querySelector('[data-field="decision-score"]')
+                score.style.backgroundColor = scoreColor
+                score.textContent = `${scorePercentage}% influence`
+                box.querySelector('[data-field="department"]').textContent = p.dept || 'Department not specified'
+                box.querySelector('[data-field="years-at-company"]').textContent = `${p.yoe_current || '?'} years at company`
+                box.querySelector('[data-field="title-level"]').textContent = p.title_level || 'Level not specified'
+                box.querySelector('[data-field="connection-count"]').textContent = `${p.connection_count || '?'} connections`
+                box.querySelector('[data-field="profile-link"]').href = safeUrl(
+                    p.id,
+                    '#',
+                    'https://www.linkedin.com/'
+                )
             }
 
             // ───── Chat drawer logic ─────
@@ -867,8 +920,7 @@
             function appendMsg(sender, text, streaming = false) {
                 let el = chatBody.lastElementChild
                 if (streaming && el && el.dataset.sender === sender) {
-                    // Just append raw text for streaming mode
-                    el.lastChild.innerHTML += escapeHtml(text).replace(/\n/g, "<br>")
+                    appendTextWithBreaks(el.lastChild, text)
                 } else {
                     el = document.createElement('div')
                     el.className = 'chat-message'
@@ -1143,14 +1195,19 @@
                     const graphInfoContent = document.getElementById('graphInfoContent');
 
                     graphInfoContent.innerHTML = `
-                            <div class="font-semibold text-neutral-200">${escapeHtml(node.name)}</div>
-                            <div class="text-neutral-400">${escapeHtml(node.industry || 'Industry: N/A')}</div>
+                            <div data-field="company-name" class="font-semibold text-neutral-200"></div>
+                            <div data-field="company-industry" class="text-neutral-400"></div>
                             <div class="flex items-center mt-1">
                                 <i class="fas fa-users mr-1 text-blue-400"></i>
-                                <span>${node.followers?.toLocaleString() || '0'} followers</span>
+                                <span data-field="company-followers"></span>
                             </div>
-                            <div class="mt-1">${escapeHtml(node.about || '')}</div>
+                            <div data-field="company-about" class="mt-1"></div>
                         `;
+
+                    graphInfoContent.querySelector('[data-field="company-name"]').textContent = node.name ?? '';
+                    graphInfoContent.querySelector('[data-field="company-industry"]').textContent = node.industry || 'Industry: N/A';
+                    graphInfoContent.querySelector('[data-field="company-followers"]').textContent = `${node.followers?.toLocaleString() || '0'} followers`;
+                    graphInfoContent.querySelector('[data-field="company-about"]').textContent = node.about || '';
 
                     graphInfo.classList.remove('hidden');
                 }
